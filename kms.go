@@ -17,8 +17,7 @@ func NewKms(ctx context.Context) *Kms {
 }
 
 func (k *Kms) Sign(keyId string, text string) ([]byte, error) {
-	ctx := k.ctx
-	client, err := kms.NewKeyManagementClient(ctx)
+	client, err := kms.NewKeyManagementClient(k.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -32,10 +31,23 @@ func (k *Kms) Sign(keyId string, text string) ([]byte, error) {
 		},
 	}
 
-	resp, err := client.AsymmetricSign(ctx, req)
+	resp, err := client.AsymmetricSign(k.ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
 	return resp.Signature, nil
+}
+
+func (k *Kms) GetPublicKey(keyId string) (*kmspb.PublicKey, error) {
+	client, err := kms.NewKeyManagementClient(k.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &kmspb.GetPublicKeyRequest{
+		Name: keyId,
+	}
+
+	return client.GetPublicKey(k.ctx, req)
 }
