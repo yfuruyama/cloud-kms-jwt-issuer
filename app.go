@@ -4,11 +4,13 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"time"
@@ -98,17 +100,7 @@ func init() {
 			handleError(w, err)
 			return
 		}
-		_, _ = keyInterface.(*rsa.PublicKey)
-
-		// nBytes := key.N.Bytes()
-		// eBytes := make([]byte, 0)
-		// binary.LittleEndian.PutUint64(eBytes, uint64(key.E))
-		// if err != nil {
-		// handleError(w, err)
-		// return
-		// }
-
-		// fmt.Fprintf(w, "n: %s, e: %s", base64.RawURLEncoding.EncodeToString(nBytes), base64.RawURLEncoding.EncodeToString(eBytes))
+		key, _ := keyInterface.(*rsa.PublicKey)
 
 		jwkSet := JwkSet{
 			Keys: []Jwk{
@@ -117,8 +109,8 @@ func init() {
 					Kty: "RSA",
 					Alg: "RS256",
 					Use: "sig",
-					N:   "n",
-					E:   "e",
+					N:   encodeBase64urlUint(key.N),
+					E:   encodeBase64urlUint(key.E),
 				},
 			},
 		}
@@ -139,11 +131,30 @@ func handleError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
-// func dataToBytes(data interface{}) ([]byte, error) {
-// buf := new(bytes.Buffer)
-// err := binary.Write(buf, binary.LittleEndian, data)
-// if err != nil {
-// return nil, err
-// }
-// return buf.Bytes(), nil
-// }
+// see. https://tools.ietf.org/html/rfc7518#section-2
+func encodeBase64urlUint(data interface{}) string {
+	var byteArray []byte
+
+	switch v := data.(type) {
+	case int:
+		d := data.(int)
+		log.Println(d)
+		byteArray = make([]byte, 8)
+		binary.BigEndian.PutUint64(byteArray, uint64(d))
+		log.Printf("%#v\n", byteArray)
+	case *big.Int:
+		d := data.(*big.Int)
+		byteArray = d.Bytes()
+	default:
+		panic(fmt.Sprintf("unexpected type: %T", v))
+	}
+
+	i := 0
+	for ; i < len(byteArray); i++ {
+		if byteArray[i] != 0 {
+			break
+		}
+	}
+
+	return base64.RawURLEncoding.EncodeToString(byteArray[i:])
+}
