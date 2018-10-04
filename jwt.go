@@ -1,15 +1,21 @@
 package app
 
 import (
+	"context"
+	"crypto"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
 	"math/big"
+	"strings"
+	"time"
 
 	kmspb "google.golang.org/genproto/googleapis/cloud/kms/v1"
 )
@@ -27,12 +33,13 @@ type JwtBody struct {
 }
 
 type VerifyResult struct {
-	Header JwtHeader
-	Body   JwtBody
+	Valid  bool
+	Header *JwtHeader
+	Body   *JwtBody
 }
 
 type JwkSet struct {
-	Keys []Jwk `json:"keys"`
+	Keys []*Jwk `json:"keys"`
 }
 
 type Jwk struct {
@@ -44,8 +51,128 @@ type Jwk struct {
 	E   string `json:"e"`
 }
 
-// func VerifyJwt(jwt string, jwkSet JwkSet) (*VerifyResult, error) {
-// }
+func GenerateToken(ctx context.Context, kid string, sub string) (string, error) {
+	header := struct {
+		Typ string `json:"typ"`
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}{
+		Typ: "JWT",
+		Alg: "RS256",
+		Kid: kid,
+	}
+	headerJson, _ := json.Marshal(header)
+
+	body := struct {
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+		Sub string `json:"sub"`
+	}{
+		Iat: time.Now().Unix(),
+		Exp: time.Now().Unix() + 900,
+		Sub: sub,
+	}
+	bodyJson, _ := json.Marshal(body)
+
+	headerAndBody := fmt.Sprintf("%s.%s", base64.RawURLEncoding.EncodeToString(headerJson), base64.RawURLEncoding.EncodeToString(bodyJson))
+
+	kms := NewKms(ctx)
+	signature, err := kms.Sign(kid, headerAndBody)
+	if err != nil {
+		return "", err
+	}
+
+	token := fmt.Sprintf("%s.%s", headerAndBody, base64.RawURLEncoding.EncodeToString([]byte(signature)))
+	return token, nil
+}
+
+func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
+	invalidVerifyResult := &VerifyResult{false, nil, nil}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return invalidVerifyResult, errors.New("not JWT string")
+	}
+
+	rawHeader := parts[0]
+	rawBody := parts[1]
+	rawSignature := parts[2]
+
+	// parse
+	headerJson, err := base64.RawURLEncoding.DecodeString(rawHeader)
+	if err != nil {
+		return invalidVerifyResult, err
+	}
+	bodyJson, err := base64.RawURLEncoding.DecodeString(rawBody)
+	if err != nil {
+		return invalidVerifyResult, err
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(rawSignature)
+	if err != nil {
+		return invalidVerifyResult, err
+	}
+
+	var header JwtHeader
+	if err = json.Unmarshal(headerJson, &header); err != nil {
+		return invalidVerifyResult, err
+	}
+	var body JwtBody
+	if err = json.Unmarshal(bodyJson, &body); err != nil {
+		return invalidVerifyResult, err
+	}
+
+	// find matched jwk
+	kid := header.Kid
+	var jwk *Jwk
+	for _, j := range jwkSet.Keys {
+		if j.Kid == kid {
+			jwk = j
+			break
+		}
+	}
+	if jwk == nil {
+		return invalidVerifyResult, errors.New("no matched jwk")
+	}
+
+	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
+	if err != nil {
+		return invalidVerifyResult, errors.New("no matched jwk")
+	}
+	if len(eBytes) < 8 {
+		padding := make([]byte, 8-len(eBytes))
+		eBytes = append(padding, eBytes...)
+	}
+	exponent := binary.BigEndian.Uint64(eBytes)
+
+	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)
+	modulus := big.NewInt(0)
+	modulus = modulus.SetBytes(nBytes)
+
+	publicKey := &rsa.PublicKey{
+		N: modulus,
+		E: int(exponent),
+	}
+
+	headerAndBody := fmt.Sprintf("%s.%s", rawHeader, rawBody)
+	digest := sha256.Sum256([]byte(headerAndBody))
+	digestSlice := digest[:]
+
+	// verify signature
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digestSlice, signature); err != nil {
+		return invalidVerifyResult, errors.New("invalid signature")
+	}
+
+	// verify body
+	if body.Exp <= time.Now().Unix() {
+		return invalidVerifyResult, errors.New("expired token")
+	}
+
+	return &VerifyResult{
+		Valid:  true,
+		Header: &header,
+		Body:   &body,
+	}, nil
+}
 
 func PublicKeyToJwk(publicKey *kmspb.PublicKey, kid string) (*Jwk, error) {
 	if alg := publicKey.GetAlgorithm(); alg != kmspb.CryptoKeyVersion_RSA_SIGN_PKCS1_2048_SHA256 {
