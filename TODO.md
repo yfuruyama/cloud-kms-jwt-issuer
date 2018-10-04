@@ -1,6 +1,5 @@
-* response with error text
 * config to config.go
-* README
-* deploy to GAE
 * key rotation
 * refactoring
+* KEY_ID and kid is misleading
+* don't put kms key resource id to kid

@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
+
+	"google.golang.org/appengine/log"
 
 	"github.com/go-chi/chi"
 	"google.golang.org/appengine"
@@ -20,7 +22,7 @@ func init() {
 
 		token, err := GenerateToken(ctx, keyId, r.RemoteAddr)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
@@ -33,13 +35,13 @@ func init() {
 		keyId := os.Getenv("KEY_ID")
 		publicKey, err := kms.GetPublicKey(keyId)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
 		jwk, err := PublicKeyToJwk(publicKey, keyId)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
@@ -55,23 +57,17 @@ func init() {
 	router.Get("/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
 
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
 		kms := NewKms(ctx)
 		keyId := os.Getenv("KEY_ID")
 		publicKey, err := kms.GetPublicKey(keyId)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
 		jwk, err := PublicKeyToJwk(publicKey, keyId)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
@@ -80,9 +76,10 @@ func init() {
 		}
 
 		// verify token
+		token := r.URL.Query().Get("token")
 		result, err := VerifyToken(token, jwkSet)
 		if err != nil {
-			handleError(w, err)
+			handleError(ctx, w, err)
 			return
 		}
 
@@ -103,7 +100,7 @@ func init() {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, "%s\n", string(resp))
 		} else {
-			log.Printf("verification failed: %s\n", result.ErrorDetail)
+			log.Infof(ctx, "verification failed: %s\n", result.ErrorDetail)
 			tokeninfo := struct {
 				Active bool `json:"active"`
 			}{
@@ -118,7 +115,8 @@ func init() {
 	http.Handle("/", router)
 }
 
-func handleError(w http.ResponseWriter, err error) {
-	log.Print(err)
+func handleError(ctx context.Context, w http.ResponseWriter, err error) {
+	log.Errorf(ctx, "%s", err)
 	w.WriteHeader(http.StatusInternalServerError)
+	fmt.Fprintf(w, "%s\n", http.StatusText(http.StatusInternalServerError))
 }
