@@ -14,7 +14,7 @@ import (
 func init() {
 	router := chi.NewRouter()
 
-	router.Get("/token", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/token", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
 		keyId := os.Getenv("KEY_ID")
 
@@ -49,7 +49,7 @@ func init() {
 
 		resp, _ := json.MarshalIndent(jwkSet, "", "  ")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, string(resp))
+		fmt.Fprintf(w, "%s\n", string(resp))
 	})
 
 	router.Get("/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
@@ -101,8 +101,9 @@ func init() {
 			}
 			resp, _ := json.MarshalIndent(tokeninfo, "", "  ")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, string(resp))
+			fmt.Fprintf(w, "%s\n", string(resp))
 		} else {
+			log.Printf("verification failed: %s\n", result.ErrorDetail)
 			tokeninfo := struct {
 				Active bool `json:"active"`
 			}{
@@ -110,7 +111,7 @@ func init() {
 			}
 			resp, _ := json.MarshalIndent(tokeninfo, "", "  ")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, string(resp))
+			fmt.Fprintf(w, "%s\n", string(resp))
 		}
 	})
 

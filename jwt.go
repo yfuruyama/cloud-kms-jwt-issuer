@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -33,9 +32,10 @@ type JwtBody struct {
 }
 
 type VerifyResult struct {
-	Valid  bool
-	Header *JwtHeader
-	Body   *JwtBody
+	Valid       bool
+	ErrorDetail string
+	Header      *JwtHeader
+	Body        *JwtBody
 }
 
 type JwkSet struct {
@@ -87,11 +87,18 @@ func GenerateToken(ctx context.Context, kid string, sub string) (string, error) 
 }
 
 func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
-	invalidVerifyResult := &VerifyResult{false, nil, nil}
+	genInvalidVerifyResult := func(errMsg string) *VerifyResult {
+		return &VerifyResult{
+			Valid:       false,
+			ErrorDetail: errMsg,
+			Header:      nil,
+			Body:        nil,
+		}
+	}
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return invalidVerifyResult, errors.New("not JWT string")
+		return genInvalidVerifyResult("not JWT string"), nil
 	}
 
 	rawHeader := parts[0]
@@ -101,24 +108,24 @@ func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
 	// parse
 	headerJson, err := base64.RawURLEncoding.DecodeString(rawHeader)
 	if err != nil {
-		return invalidVerifyResult, err
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 	bodyJson, err := base64.RawURLEncoding.DecodeString(rawBody)
 	if err != nil {
-		return invalidVerifyResult, err
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(rawSignature)
 	if err != nil {
-		return invalidVerifyResult, err
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 
 	var header JwtHeader
 	if err = json.Unmarshal(headerJson, &header); err != nil {
-		return invalidVerifyResult, err
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 	var body JwtBody
 	if err = json.Unmarshal(bodyJson, &body); err != nil {
-		return invalidVerifyResult, err
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 
 	// find matched jwk
@@ -131,12 +138,12 @@ func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
 		}
 	}
 	if jwk == nil {
-		return invalidVerifyResult, errors.New("no matched jwk")
+		return genInvalidVerifyResult("no matched jwk"), nil
 	}
 
 	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
 	if err != nil {
-		return invalidVerifyResult, errors.New("no matched jwk")
+		return genInvalidVerifyResult(err.Error()), nil
 	}
 	if len(eBytes) < 8 {
 		padding := make([]byte, 8-len(eBytes))
@@ -159,18 +166,19 @@ func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
 
 	// verify signature
 	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digestSlice, signature); err != nil {
-		return invalidVerifyResult, errors.New("invalid signature")
+		return genInvalidVerifyResult("invalid signature"), nil
 	}
 
 	// verify body
 	if body.Exp <= time.Now().Unix() {
-		return invalidVerifyResult, errors.New("expired token")
+		return genInvalidVerifyResult("expired token"), nil
 	}
 
 	return &VerifyResult{
-		Valid:  true,
-		Header: &header,
-		Body:   &body,
+		Valid:       true,
+		ErrorDetail: "",
+		Header:      &header,
+		Body:        &body,
 	}, nil
 }
 
@@ -208,10 +216,8 @@ func encodeBase64urlUint(data interface{}) string {
 	switch v := data.(type) {
 	case int:
 		d := data.(int)
-		log.Println(d)
 		byteArray = make([]byte, 8)
 		binary.BigEndian.PutUint64(byteArray, uint64(d))
-		log.Printf("%#v\n", byteArray)
 	case *big.Int:
 		d := data.(*big.Int)
 		byteArray = d.Bytes()
