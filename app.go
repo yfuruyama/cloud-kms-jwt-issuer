@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 
 	"google.golang.org/appengine/log"
 
@@ -15,31 +14,33 @@ import (
 
 func init() {
 	router := chi.NewRouter()
+	config := GetConfig()
 
 	router.Post("/token", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
-		keyId := os.Getenv("KEY_ID")
+		sub := r.FormValue("sub")
 
-		token, err := GenerateToken(ctx, keyId, r.RemoteAddr)
+		result, err := GenerateToken(ctx, config.KeyResourceId, sub)
 		if err != nil {
 			handleError(ctx, w, err)
 			return
 		}
 
-		fmt.Fprintln(w, token)
+		resp, _ := json.MarshalIndent(result, "", "  ")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "%s\n", string(resp))
 	})
 
 	router.Get("/certs", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
 		kms := NewKms(ctx)
-		keyId := os.Getenv("KEY_ID")
-		publicKey, err := kms.GetPublicKey(keyId)
+		publicKey, err := kms.GetPublicKey(config.KeyResourceId)
 		if err != nil {
 			handleError(ctx, w, err)
 			return
 		}
 
-		jwk, err := PublicKeyToJwk(publicKey, keyId)
+		jwk, err := PublicKeyToJwk(publicKey, config.KeyResourceId)
 		if err != nil {
 			handleError(ctx, w, err)
 			return
@@ -57,15 +58,15 @@ func init() {
 	router.Get("/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
 		ctx := appengine.NewContext(r)
 
+		// get current key set
 		kms := NewKms(ctx)
-		keyId := os.Getenv("KEY_ID")
-		publicKey, err := kms.GetPublicKey(keyId)
+		publicKey, err := kms.GetPublicKey(config.KeyResourceId)
 		if err != nil {
 			handleError(ctx, w, err)
 			return
 		}
 
-		jwk, err := PublicKeyToJwk(publicKey, keyId)
+		jwk, err := PublicKeyToJwk(publicKey, config.KeyResourceId)
 		if err != nil {
 			handleError(ctx, w, err)
 			return

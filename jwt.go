@@ -31,13 +31,6 @@ type JwtBody struct {
 	Sub string `json:"sub"`
 }
 
-type VerifyResult struct {
-	Valid       bool
-	ErrorDetail string
-	Header      *JwtHeader
-	Body        *JwtBody
-}
-
 type JwkSet struct {
 	Keys []*Jwk `json:"keys"`
 }
@@ -51,7 +44,26 @@ type Jwk struct {
 	E   string `json:"e"`
 }
 
-func GenerateToken(ctx context.Context, kid string, sub string) (string, error) {
+type GenerateResult struct {
+	Token     string `json:"token"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
+type VerifyResult struct {
+	Valid       bool
+	ErrorDetail string
+	Header      *JwtHeader
+	Body        *JwtBody
+}
+
+const TOKEN_EXPIRES_IN = 900
+
+func GenerateToken(ctx context.Context, keyResourceId string, sub string) (*GenerateResult, error) {
+	kid, err := KeyResourceIdToKid(keyResourceId)
+	if err != nil {
+		return nil, err
+	}
+
 	header := struct {
 		Typ string `json:"typ"`
 		Alg string `json:"alg"`
@@ -69,7 +81,7 @@ func GenerateToken(ctx context.Context, kid string, sub string) (string, error) 
 		Sub string `json:"sub"`
 	}{
 		Iat: time.Now().Unix(),
-		Exp: time.Now().Unix() + 900,
+		Exp: time.Now().Unix() + TOKEN_EXPIRES_IN,
 		Sub: sub,
 	}
 	bodyJson, _ := json.Marshal(body)
@@ -77,13 +89,16 @@ func GenerateToken(ctx context.Context, kid string, sub string) (string, error) 
 	headerAndBody := fmt.Sprintf("%s.%s", base64.RawURLEncoding.EncodeToString(headerJson), base64.RawURLEncoding.EncodeToString(bodyJson))
 
 	kms := NewKms(ctx)
-	signature, err := kms.Sign(kid, headerAndBody)
+	signature, err := kms.Sign(keyResourceId, headerAndBody)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	token := fmt.Sprintf("%s.%s", headerAndBody, base64.RawURLEncoding.EncodeToString([]byte(signature)))
-	return token, nil
+	return &GenerateResult{
+		Token:     token,
+		ExpiresIn: TOKEN_EXPIRES_IN,
+	}, nil
 }
 
 func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
@@ -182,7 +197,7 @@ func VerifyToken(token string, jwkSet JwkSet) (*VerifyResult, error) {
 	}, nil
 }
 
-func PublicKeyToJwk(publicKey *kmspb.PublicKey, kid string) (*Jwk, error) {
+func PublicKeyToJwk(publicKey *kmspb.PublicKey, keyResourceId string) (*Jwk, error) {
 	if alg := publicKey.GetAlgorithm(); alg != kmspb.CryptoKeyVersion_RSA_SIGN_PKCS1_2048_SHA256 {
 		return nil, errors.New(fmt.Sprintf("Unsupported algorithm: %d", alg))
 	}
@@ -198,6 +213,11 @@ func PublicKeyToJwk(publicKey *kmspb.PublicKey, kid string) (*Jwk, error) {
 		return nil, err
 	}
 	key, _ := keyInterface.(*rsa.PublicKey)
+
+	kid, err := KeyResourceIdToKid(keyResourceId)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Jwk{
 		Kid: kid,
